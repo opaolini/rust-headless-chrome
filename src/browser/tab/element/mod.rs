@@ -309,6 +309,44 @@ impl<'a> Element<'a> {
         Ok(result)
     }
 
+    pub fn call_js_fn_with_timeout(
+        &self,
+        function_declaration: &str,
+        args: Vec<serde_json::Value>,
+        await_promise: bool,
+        timeout: Duration,
+    ) -> Result<Runtime::RemoteObject> {
+        let mut args = args.clone();
+        let result = self
+            .parent
+            .call_method_with_timeout(Runtime::CallFunctionOn {
+                object_id: Some(self.remote_object_id.clone()),
+                function_declaration: function_declaration.to_string(),
+                arguments: args
+                    .iter_mut()
+                    .map(|v| {
+                        Some(Runtime::CallArgument {
+                            value: Some(v.take()),
+                            unserializable_value: None,
+                            object_id: None,
+                        })
+                    })
+                    .collect(),
+                return_by_value: Some(false),
+                generate_preview: Some(true),
+                silent: Some(false),
+                await_promise: Some(await_promise),
+                user_gesture: None,
+                execution_context_id: None,
+                object_group: None,
+                throw_on_side_effect: None,
+            }, timeout)?
+            .result;
+
+        Ok(result)
+    }
+
+
     pub fn focus(&self) -> Result<&Self> {
         self.scroll_into_view()?;
         self.parent.call_method(DOM::Focus {

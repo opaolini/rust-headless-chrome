@@ -177,6 +177,68 @@ impl Transport {
         parse_response::<C::ReturnObject>((response_result?)?)
     }
 
+pub fn call_method_with_timeout<C>(
+        &self,
+        method: C,
+        destination: MethodDestination,
+        timeout: Duration
+    ) -> Result<C::ReturnObject>
+    where
+        C: Method + serde::Serialize,
+    {
+        // TODO: use get_mut to get exclusive access for entire block... maybe.
+        if !self.open.load(Ordering::SeqCst) {
+            return Err(ConnectionClosed {}.into());
+        }
+        let call_id = self.unique_call_id();
+        let call = method.to_method_call(call_id);
+
+        let message_text = serde_json::to_string(&call)?;
+
+        let response_rx = self.waiting_call_registry.register_call(call.id);
+
+        match destination {
+            MethodDestination::Target(session_id) => {
+                let message = message_text.clone();
+                let target_method = Target::SendMessageToTarget {
+                    target_id: None,
+                    session_id: Some(session_id.0),
+                    message: message,
+                };
+                let mut raw = message_text.clone();
+                raw.truncate(300);
+                trace!("Msg to tab: {}", &raw);
+                if let Err(e) = self.call_method_on_browser(target_method) {
+                    warn!("Failed to call method on browser: {:?}", e);
+                    self.waiting_call_registry.unregister_call(call.id);
+                    trace!("Unregistered callback: {:?}", call.id);
+                    return Err(e);
+                }
+            }
+            MethodDestination::Browser => {
+                if let Err(e) = self.web_socket_connection.send_message(&message_text) {
+                    self.waiting_call_registry.unregister_call(call.id);
+                    return Err(e);
+                }
+                trace!("sent method call to browser via websocket");
+            }
+        }
+
+        let mut params_string = format!("{:?}", call.get_params());
+        params_string.truncate(400);
+        trace!(
+            "waiting for response from call registry: {} {:?}",
+            &call_id,
+            params_string
+        );
+
+        let response_result = util::Wait::new(timeout, Duration::from_millis(5))
+            .until(|| response_rx.try_recv().ok());
+        trace!("received response for: {} {:?}", &call_id, params_string);
+        parse_response::<C::ReturnObject>((response_result?)?)
+    }
+
+
     pub fn call_method_on_target<C>(
         &self,
         session_id: SessionId,
@@ -187,6 +249,19 @@ impl Transport {
     {
         // TODO: remove clone
         self.call_method(method, MethodDestination::Target(session_id))
+    }
+
+    pub fn call_method_on_target_with_timeout<C>(
+        &self,
+        session_id: SessionId,
+        method: C,
+        timeout: Duration
+    ) -> Result<C::ReturnObject>
+    where
+        C: Method + serde::Serialize,
+    {
+        // TODO: remove clone
+        self.call_method_with_timeout(method, MethodDestination::Target(session_id), timeout)
     }
 
     pub fn call_method_on_browser<C>(&self, method: C) -> Result<C::ReturnObject>

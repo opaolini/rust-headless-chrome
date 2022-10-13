@@ -467,6 +467,20 @@ impl Tab {
         result
     }
 
+    pub fn call_method_with_timeout<C>(&self, method: C, timeout: Duration) -> Result<C::ReturnObject>
+    where
+        C: Method + serde::Serialize + std::fmt::Debug,
+    {
+        trace!("Calling method: {:?}", method);
+        let result = self
+            .transport
+            .call_method_on_target(self.session_id.clone(), method);
+        let mut result_string = format!("{:?}", result);
+        result_string.truncate(70);
+        trace!("Got result: {:?}", result_string);
+        result
+    }
+
     pub fn wait_until_navigated(&self) -> Result<&Self> {
         let navigating = Arc::clone(&self.navigating);
         let timeout = *self.default_timeout.read().unwrap();
